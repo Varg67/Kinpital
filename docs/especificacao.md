@@ -247,12 +247,14 @@ O usuário e os Kins recebem salário mensal em tempo real, direto na conta. Det
 2. **Como o Kin movimenta dinheiro:** o Kin faz transações durante a conversa (ex.: "te mandei R$ 50" vira uma
    transferência no app), ou só o usuário opera pelo app e o Kin é informado (`kin tell`)? *(Adiado: será pensado
    depois.)*
-3. **Vencimento da fatura:** cada pessoa escolhe o dia ao abrir o cartão (ex.: 5, 10, 15, 20 ou 25, com fechamento
-   uns 7 dias antes), ou cada banco tem um dia fixo?
+3. **Vencimento da fatura:** ~~cada pessoa escolhe ou dia fixo por banco?~~ Decidido: sorteado (ver 14). Falta
+   definir o intervalo do sorteio e quantos dias antes a fatura fecha.
 4. **Salário dos Kins:** de onde vem o valor? Da profissão no backstory do Kin, escolhido pelo usuário, ou outra
    regra?
 5. **Rede no Workshop:** existe *grant* de rede? (ver 10)
-6. **Saldo inicial:** com quanto cada pessoa começa?
+6. **Saldo inicial:** ~~com quanto cada pessoa começa?~~ Decidido: zero, e cada um informa o próprio dinheiro na
+   primeira vez (ver 14). Falta definir o fluxo: em que moeda, se vira dinheiro em espécie ou já entra numa conta, e
+   como o Kin informa o dele.
 7. **Moeda principal:** em que moeda a KinWallet mostra o saldo total (BRL por padrão)?
 8. **Realismo dos juros:** usar taxas no nível real (o rotativo no Brasil passa de 400% ao ano) ou suavizar?
 9. **O que o Kin sabe:** o Kin é informado das próprias finanças (saldo, dívidas) para usar no roleplay?
@@ -277,3 +279,6 @@ O usuário e os Kins recebem salário mensal em tempo real, direto na conta. Det
 - **2026-11-23:** como o Kin movimenta dinheiro fica para depois.
 - **2026-11-23:** primeira tela: protótipo da tela inicial, KinWallet, tela de cada banco com as cores dele, Assets,
   Work & Income e Settings, com dados de exemplo.
+- **2026-11-23:** todos (usuário e Kins) começam com **zero**. Na primeira vez que abrem o app, cada um **informa
+  quanto dinheiro tem**.
+- **2026-11-23:** o **dia de vencimento da fatura é sorteado** quando o cartão é emitido.
