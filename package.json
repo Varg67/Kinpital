@@ -4,8 +4,11 @@
   "private": true,
   "description": "A fictional, realistic finance app for Kindroid, built as a Kindroid Workshop program.",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
+    "build": "node scripts/build-screen.mjs",
     "test": "node --test \"tests/**/*.test.js\"",
     "start": "node dev/serve.mjs"
   }

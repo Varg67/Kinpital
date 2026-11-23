@@ -1,7 +1,7 @@
 /*
  * Kinpital theme tokens: the only place colours, radii and shadows are defined.
  * Same palette as Clotheskin, sampled from the Kindroid UI v2 login screen (light, warm, glass surfaces, coral accent).
- * [data-theme="sage"] is a green theme sampled from a user-customised Kindroid desktop window.
+ * [data-palette="sage"] is a green theme sampled from a user-customised Kindroid desktop window.
  * Inside a bank, the screen overrides --accent, --on-accent, --bg and the glows with that bank's colours
  * (src/core/banks.js). Components never use raw colours; add a theme by overriding these variables.
  */
@@ -58,7 +58,7 @@
 /* Green theme sampled from a customised Kindroid desktop window.
    Sampled: page #f4f6f5, glow #cfeae0, text #283e36, glass #f9faf9.
    The accent is NOT sampled (the screenshot had no primary button): it is a deeper green of the same hue. */
-:root[data-theme="sage"] {
+:root[data-palette="sage"] {
   --bg: #f4f6f5;
   --bg-glow-1: rgba(150, 214, 188, .36);
   --bg-glow-2: rgba(190, 232, 214, .34);

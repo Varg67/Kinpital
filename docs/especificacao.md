@@ -171,6 +171,22 @@ Regra: texto sobre qualquer cor precisa de pelo menos **4,5:1** (WCAG AA). Medid
 
 *(Barkleys, o mais baixo dos que passam, tem 5,5.)*
 
+### Tela inicial (protótipo)
+
+Uma coluna, no tema do Kinpital:
+
+1. **Cabeçalho:** "Kinpital", data e hora, botão de configurações.
+2. **De quem é a visão:** botões "You" e um por Kin anexado. A tela inteira muda conforme a pessoa escolhida.
+3. **Patrimônio líquido:** contas + bens − faturas − empréstimos, convertido para a moeda escolhida. Tem botão de olho
+   para esconder os valores e mostra a variação do mês.
+4. **Coming up:** faturas, parcelas e dias de pagamento, por data. Atrasos vêm primeiro, em vermelho.
+5. **Áreas:** KinWallet, Assets, Work & Income e Market (marcado "em breve").
+6. **Atividade recente** de todos os bancos, com o logo de cada um.
+7. **Câmbio do dia** no rodapé.
+
+Por enquanto o protótipo mostra as finanças de todos, como um "administrador" do jogo. Quem vê o quê ainda está em
+aberto (ver 13).
+
 ### Logos
 
 A imagem de referência é um bitmap com os 24 logos juntos e em baixa resolução. No app, cada logo precisa ser um
@@ -241,6 +257,7 @@ O usuário e os Kins recebem salário mensal em tempo real, direto na conta. Det
 8. **Realismo dos juros:** usar taxas no nível real (o rotativo no Brasil passa de 400% ao ano) ou suavizar?
 9. **O que o Kin sabe:** o Kin é informado das próprias finanças (saldo, dívidas) para usar no roleplay?
 10. **Tradicional × Digital:** quais diferenças concretas no jogo?
+11. **Privacidade:** o usuário vê tudo dos Kins, só as próprias finanças, ou um meio-termo (saldo sem extrato)?
 
 ## 14. Histórico de decisões
 
@@ -258,3 +275,5 @@ O usuário e os Kins recebem salário mensal em tempo real, direto na conta. Det
   português.
 - **2026-11-23:** os logos são redesenhados em SVG a partir da imagem de referência.
 - **2026-11-23:** como o Kin movimenta dinheiro fica para depois.
+- **2026-11-23:** primeira tela: protótipo da tela inicial, KinWallet, tela de cada banco com as cores dele, Assets,
+  Work & Income e Settings, com dados de exemplo.

@@ -16,3 +16,11 @@ export function contrast(a, b) {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
 }
+
+/**
+ * The first colour that reads as text on `background` (WCAG AA, 4.5:1), or the theme's dark text.
+ * @param {string[]} candidates @param {string} background
+ */
+export function firstReadable(candidates, background) {
+  return candidates.find((c) => contrast(c, background) >= 4.5) || '#2B2B2B';
+}
