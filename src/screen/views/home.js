@@ -5,6 +5,7 @@ import { summarize } from '../../core/finance.js';
 import { formatMoney } from '../../core/money.js';
 import { clockLine } from '../../core/dates.js';
 import { activityRow, empty, money, person, possessive, sectionTitle, upcomingRow } from '../common.js';
+import { setupCard } from './setup.js';
 
 /** @param {import('../common.js').Ctx} ctx */
 export function homeView(ctx) {
@@ -32,9 +33,11 @@ export function homeView(ctx) {
       h('button', { class: 'icon-btn small', type: 'button', 'aria-label': state.hidden ? 'Show amounts' : 'Hide amounts', 'aria-pressed': String(state.hidden), onclick: () => ctx.set({ hidden: !state.hidden }) },
         icon(state.hidden ? 'eye-off' : 'eye', 20))),
     h('p', { class: 'worth-value' }, money(ctx, s.netWorth, cur)),
-    h('p', { class: `worth-change ${state.hidden ? 'off' : change >= 0 ? 'up' : 'down'}` },
-      state.hidden ? 'This month: hidden' : `${change >= 0 ? '▲' : '▼'} ${formatMoney(Math.abs(change), cur)} this month`),
-    h('p', { class: 'worth-meta muted' }, [plural(s.accounts.length, 'account'), plural(s.cards.length, 'card'), s.loans.length ? plural(s.loans.length, 'loan') : null].filter(Boolean).join(' · ')));
+    h('p', { class: `worth-change ${state.hidden || Math.abs(change) < 0.005 ? 'off' : change > 0 ? 'up' : 'down'}` },
+      state.hidden ? 'This month: hidden'
+        : Math.abs(change) < 0.005 ? 'No money in or out this month'
+          : `${change > 0 ? '▲' : '▼'} ${formatMoney(Math.abs(change), cur)} this month`),
+    h('p', { class: 'worth-meta muted' }, [s.cashTotal > 0 ? `${money(ctx, s.cashTotal, cur)} in cash` : null, plural(s.accounts.length, 'account'), plural(s.cards.length, 'card'), s.loans.length ? plural(s.loans.length, 'loan') : null].filter(Boolean).join(' · ')));
 
   const coming = h('section', { class: 'card list-card' },
     sectionTitle('Coming up'),
@@ -47,7 +50,7 @@ export function homeView(ctx) {
   }, h('span', { class: 'tile-icon' }, icon(ic, 24)), h('span', { class: 'tile-title' }, title), h('span', { class: 'tile-sub' }, sub));
 
   const tiles = h('nav', { class: 'tiles', 'aria-label': 'Areas' },
-    tile('wallet', 'KinWallet', s.accounts.length ? plural(s.accounts.length, 'account') : 'Open an account', { name: 'wallet' }),
+    tile('wallet', 'KinWallet', s.accounts.length ? plural(s.accounts.length, 'account') : s.cashTotal > 0 ? 'Cash to deposit' : 'Open an account', { name: 'wallet' }),
     tile('home', 'Assets', s.assets.length ? plural(s.assets.length, 'item') : 'Nothing yet', { name: 'assets' }),
     tile('briefcase', 'Work & Income', nextPay ? `Payday ${nextPay.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : 'No income yet', { name: 'work' }),
     tile('chart', 'Market', 'Coming soon', null));
@@ -64,7 +67,7 @@ export function homeView(ctx) {
     h('header', { class: 'home-head' },
       h('div', null, h('h1', { class: 'brand' }, 'Kinpital'), h('p', { class: 'clock muted' }, clockLine(state.now))),
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Settings', onclick: () => ctx.go({ name: 'settings' }) }, icon('gear'))),
-    chips, info, worth, coming, tiles, recent, ticker,
-    h('p', { class: 'foot muted' }, `Prototype with sample data. ${possessive(ctx)} figures are made up; exchange rates are sample values.`),
+    chips, info, setupCard(ctx), worth, coming, tiles, recent, ticker,
+    h('p', { class: 'foot muted' }, `Prototype: nothing is saved yet, and exchange rates are sample values. ${possessive(ctx) === 'Your' ? 'Reloading starts over.' : ''}`),
   ];
 }

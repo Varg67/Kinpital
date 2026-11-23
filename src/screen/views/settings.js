@@ -1,5 +1,7 @@
 /** Settings: colours, the currency totals are shown in, and the attached Kins. */
 import { h } from '../dom.js';
+import { icon } from '../icons.js';
+import { freshStart, sampleData } from '../sample.js';
 import { sectionTitle, topBar } from '../common.js';
 
 const CURRENCIES = ['BRL', 'USD', 'EUR', 'GBP', 'JPY', 'INR'];
@@ -17,5 +19,10 @@ export function settingsView(ctx) {
         CURRENCIES.map((c) => h('option', { value: c, selected: c === state.currency }, c)))),
     h('section', { class: 'card list-card' }, sectionTitle('Attached Kins'),
       h('ul', { class: 'plain' }, data.people.filter((/** @type {any} */ p) => p.kind === 'kin').map((/** @type {any} */ p) => h('li', null, p.name))),
-      h('p', { class: 'muted small' }, 'Kins with Kinpital attached in Kindroid’s Workshop. Sample names in the prototype.'))];
+      h('p', { class: 'muted small' }, 'Kins with Kinpital attached in Kindroid’s Workshop. Sample names in the prototype.')),
+    h('section', { class: 'card list-card' }, sectionTitle('Prototype'),
+      h('p', { class: 'muted small pad' }, 'Nothing is saved yet: reloading the page starts over.'),
+      h('div', { class: 'btn-row pad' },
+        h('button', { class: 'btn', type: 'button', onclick: () => { ctx.replaceData(freshStart()); ctx.toast('Everyone is back at zero.'); } }, icon('refresh', 18), 'Start over'),
+        h('button', { class: 'btn', type: 'button', onclick: () => { ctx.replaceData(sampleData(state.now)); ctx.toast('Sample data loaded.'); } }, 'Load sample data')))];
 }

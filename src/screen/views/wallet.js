@@ -11,6 +11,16 @@ export function walletView(ctx) {
   const s = summarize(data, state.person, state.now, state.currency);
   const has = new Set(s.accounts.map((a) => a.bank));
 
+  const cash = s.cash.length
+    ? h('section', { class: 'card list-card' },
+      sectionTitle('Cash'),
+      h('ul', { class: 'rows' }, s.cash.map((c) => h('li', { class: 'row' },
+        h('span', { class: 'row-icon' }, icon('cash', 20)),
+        h('span', { class: 'row-text' }, h('span', { class: 'row-main' }, `Cash · ${c.currency}`), h('span', { class: 'row-sub' }, 'In hand, not in a bank')),
+        h('span', { class: 'amount' }, money(ctx, c.amount, c.currency))))),
+      h('p', { class: 'muted small cash-help' }, 'Open an account at any bank below, then tap Deposit there. You can spread it across several banks.'))
+    : null;
+
   const accounts = h('section', { class: 'card list-card' },
     sectionTitle(`${possessive(ctx)} accounts`),
     s.accounts.length
@@ -23,7 +33,7 @@ export function walletView(ctx) {
           icon('chevron', 18)));
       }))
       : empty('No accounts yet. Pick a bank below.'),
-    s.accounts.length ? h('p', { class: 'total' }, h('span', { class: 'muted' }, 'Total in accounts'), h('strong', null, money(ctx, s.cash, state.currency))) : null);
+    s.accounts.length ? h('p', { class: 'total' }, h('span', { class: 'muted' }, 'Total in accounts'), h('strong', null, money(ctx, s.accountsTotal, state.currency))) : null);
 
   const banks = h('section', { class: 'card list-card' },
     sectionTitle(`Open an account · ${BANKS.length} banks`),
@@ -34,5 +44,5 @@ export function walletView(ctx) {
           logo(b.id, 40), h('span', { class: 'bank-pick-name' }, b.name),
           h('span', { class: 'bank-pick-sub' }, has.has(b.id) ? 'Account open' : b.type === 'digital' ? 'Digital' : 'Traditional'))))))));
 
-  return [topBar(ctx, 'KinWallet'), accounts, banks];
+  return [topBar(ctx, 'KinWallet'), cash, accounts, banks];
 }

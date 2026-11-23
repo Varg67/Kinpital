@@ -7,11 +7,15 @@ import { dueLabel, shortDate } from '../core/dates.js';
 
 /**
  * @typedef {object} Ctx
- * @property {{ person: string, view: { name: string, bank?: string }, hidden: boolean, currency: string, palette: string, now: Date, info: boolean }} state
+ * @property {{ person: string, view: { name: string, bank?: string }, hidden: boolean, currency: string, palette: string, now: Date, info: boolean, typing: string | null, form: { type: string, account?: string } | null }} state
  * @property {any} data
  * @property {(view: { name: string, bank?: string }) => void} go
  * @property {(patch: object) => void} set
  * @property {(message: string) => void} toast
+ * @property {(change: (data: any) => void, done?: string | (() => string)) => boolean} act runs a ledger change; its error becomes a toast
+ * @property {(personId: string) => void} askKin
+ * @property {(data: any, personId: string, amount: number, currency: string) => void} declareMoney
+ * @property {(data: any) => void} replaceData
  */
 
 export const HIDDEN = '••••••';
@@ -47,12 +51,12 @@ export function sectionTitle(text) {
 
 /** One line of activity. @param {Ctx} ctx @param {any} t */
 export function activityRow(ctx, t) {
-  const bank = bankById(t.bank);
+  const bank = t.bank ? bankById(t.bank) : null;
   return h('li', { class: 'row' },
-    logo(t.bank, 32),
+    bank ? logo(bank.id, 32) : h('span', { class: 'row-icon small' }, icon('cash', 18)),
     h('span', { class: 'row-text' },
       h('span', { class: 'row-main' }, t.text),
-      h('span', { class: 'row-sub' }, `${bank ? bank.name : ''} · ${shortDate(t.date)}`)),
+      h('span', { class: 'row-sub' }, `${bank ? bank.name : 'Cash'} · ${shortDate(t.date)}`)),
     h('span', { class: `amount ${t.amount > 0 ? 'in' : ''}` }, money(ctx, t.amount, t.currency, { sign: true })));
 }
 

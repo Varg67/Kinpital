@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { convert, formatMoney } from '../src/core/money.js';
+import { convert, formatMoney, parseAmount, roundNice } from '../src/core/money.js';
 import { addDays, daysBetween, dueLabel, nextMonthDay } from '../src/core/dates.js';
 import { summarize } from '../src/core/finance.js';
 import { sampleData } from '../src/screen/sample.js';
@@ -37,8 +37,8 @@ test('summary: net worth = accounts + assets − card bills − loans; late item
   const now = new Date(2026, 10, 23, 12);
   const data = sampleData(now);
   const you = summarize(data, 'you', now, 'BRL');
-  // accounts 4820.35 + 2310 + 450 EUR; car 48000; bills 830 + 64.90 EUR; loan 9600
-  const expected = 4820.35 + 2310 + 450 * 6.14 + 48000 - 830 - 64.9 * 6.14 - 9600;
+  // cash 180; accounts 4820.35 + 2310 + 450 EUR; car 48000; bills 830 + 64.90 EUR; loan 9600
+  const expected = 180 + 4820.35 + 2310 + 450 * 6.14 + 48000 - 830 - 64.9 * 6.14 - 9600;
   assert.ok(Math.abs(you.netWorth - expected) < 1e-6);
   assert.equal(you.accounts.length, 3);
   assert.deepEqual(you.upcoming.map((u) => u.days), [...you.upcoming.map((u) => u.days)].sort((a, b) => a - b));
@@ -46,4 +46,28 @@ test('summary: net worth = accounts + assets − card bills − loans; late item
   assert.equal(lucas.upcoming[0].kind, 'loan');
   assert.ok(lucas.upcoming[0].days < 0, 'the late installment is first');
   assert.ok(you.activity[0].date >= you.activity[1].date, 'newest activity first');
+});
+
+test('amounts typed by a person', () => {
+  assert.equal(parseAmount('3500'), 3500);
+  assert.equal(parseAmount('3,500.50'), 3500.5);
+  assert.equal(parseAmount('3.500,50'), 3500.5);
+  assert.equal(parseAmount('R$ 1.200'), 1200);
+  assert.equal(parseAmount('1200,5'), 1200.5);
+  assert.equal(parseAmount('1,000,000'), 1000000);
+  assert.equal(parseAmount('0'), 0);
+  assert.equal(parseAmount('abc'), null);
+  assert.equal(parseAmount(''), null);
+  assert.equal(roundNice(28169), 28000);
+  assert.equal(roundNice(1532), 1500);
+  assert.equal(roundNice(376), 380);
+});
+
+test('summary: this month counts money in and out, not cash moved into a bank', () => {
+  const now = new Date(2026, 10, 23, 12);
+  const data = sampleData(now);
+  const you = summarize(data, 'you', now, 'BRL');
+  // this month: -50, -12.90, -23.40 EUR, -214.75 (the salary on Nov 5 is this month too when today is the 23rd)
+  const expected = -50 - 12.9 - 23.4 * 6.14 - 214.75 + 3200;
+  assert.ok(Math.abs(you.monthChange - expected) < 1e-6, String(you.monthChange));
 });

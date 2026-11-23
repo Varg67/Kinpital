@@ -217,6 +217,22 @@ Os nomes são paródias. As cores e os logos devem ter identidade própria, sem 
 
 A lista ainda está sendo definida e pode crescer.
 
+## 9.1 Primeira vez, dinheiro em espécie e cartões
+
+- **Todos começam com zero.** Na primeira vez, cada pessoa informa quanto dinheiro tem, em qualquer moeda. O valor vira
+  **Cash** (dinheiro em espécie) na KinWallet.
+- **O usuário** digita o próprio valor.
+- **O Kin:** o app pergunta a ele (`kin ask`, pergunta em `src/core/prompt.js`). O Kin responde em JSON, com o valor, a
+  moeda e uma frase na voz dele. **O usuário confirma** antes de valer: Accept, Edit ou Ask again. O usuário também
+  pode digitar o valor do Kin ("Type it myself").
+- **Cash se distribui entre bancos:** abrir conta (na moeda do banco; os internacionais oferecem todas), depositar e
+  sacar. Só se deposita cash da mesma moeda da conta (câmbio vem depois).
+- **Cartão:** precisa de conta no banco, um por banco. O **dia de vencimento é sorteado entre 1 e 28** na emissão e
+  fica fixo. A fatura **fecha 7 dias antes** do vencimento. Limite provisório: o equivalente a R$ 2.000 (tradicional)
+  ou R$ 1.000 (digital) na moeda da conta, até existirem renda e score.
+- Mover dinheiro entre cash e contas não muda o patrimônio nem conta como entrada ou saída do mês. O dinheiro inicial
+  também não conta.
+
 ## 10. Dados reais (modelo híbrido)
 
 A economia de base é real e os bancos fictícios aplicam suas margens por cima:
@@ -247,14 +263,11 @@ O usuário e os Kins recebem salário mensal em tempo real, direto na conta. Det
 2. **Como o Kin movimenta dinheiro:** o Kin faz transações durante a conversa (ex.: "te mandei R$ 50" vira uma
    transferência no app), ou só o usuário opera pelo app e o Kin é informado (`kin tell`)? *(Adiado: será pensado
    depois.)*
-3. **Vencimento da fatura:** ~~cada pessoa escolhe ou dia fixo por banco?~~ Decidido: sorteado (ver 14). Falta
-   definir o intervalo do sorteio e quantos dias antes a fatura fecha.
+3. ~~**Vencimento da fatura**~~ Decidido (ver 14).
 4. **Salário dos Kins:** de onde vem o valor? Da profissão no backstory do Kin, escolhido pelo usuário, ou outra
    regra?
 5. **Rede no Workshop:** existe *grant* de rede? (ver 10)
-6. **Saldo inicial:** ~~com quanto cada pessoa começa?~~ Decidido: zero, e cada um informa o próprio dinheiro na
-   primeira vez (ver 14). Falta definir o fluxo: em que moeda, se vira dinheiro em espécie ou já entra numa conta, e
-   como o Kin informa o dele.
+6. ~~**Saldo inicial**~~ Decidido (ver 14).
 7. **Moeda principal:** em que moeda a KinWallet mostra o saldo total (BRL por padrão)?
 8. **Realismo dos juros:** usar taxas no nível real (o rotativo no Brasil passa de 400% ao ano) ou suavizar?
 9. **O que o Kin sabe:** o Kin é informado das próprias finanças (saldo, dívidas) para usar no roleplay?
@@ -282,3 +295,6 @@ O usuário e os Kins recebem salário mensal em tempo real, direto na conta. Det
 - **2026-11-23:** todos (usuário e Kins) começam com **zero**. Na primeira vez que abrem o app, cada um **informa
   quanto dinheiro tem**.
 - **2026-11-23:** o **dia de vencimento da fatura é sorteado** quando o cartão é emitido.
+- **2026-11-23:** dinheiro inicial vira **cash**, para distribuir entre bancos. O valor do Kin é perguntado a ele e
+  **confirmado pelo usuário**, que também pode digitá-lo.
+- **2026-11-23:** vencimento sorteado **entre 1 e 28**, fatura fecha **7 dias antes**.

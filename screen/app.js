@@ -197,7 +197,7 @@ const { convert, sum } = req("src/core/money.js");
 const { daysBetween, nextMonthDay } = req("src/core/dates.js");
 
 /**
- * @param {any} data the finance state (see src/screen/sample.js for its shape)
+ * @param {any} data the finance state (see ledger.emptyState and src/screen/sample.js)
  * @param {string} personId
  * @param {Date} now
  * @param {string} currency the currency totals are shown in
@@ -208,18 +208,20 @@ function summarize(data, personId, now, currency) {
   /** @param {number} amount @param {string} from */
   const to = (amount, from) => convert(amount, from, currency, data.rates);
 
+  const cash = mine(data.cash).filter((c) => c.amount > 0);
   const accounts = mine(data.accounts);
-  const cards = mine(data.cards);
+  const cards = mine(data.cards).map((c) => ({ ...c, due: nextMonthDay(now, c.dueDay) }));
   const loans = mine(data.loans);
   const assets = mine(data.assets);
   const income = mine(data.income);
 
-  const cash = sum(accounts.map((a) => to(a.balance, a.currency)));
+  const cashTotal = sum(cash.map((c) => to(c.amount, c.currency)));
+  const accountsTotal = sum(accounts.map((a) => to(a.balance, a.currency)));
   const owned = sum(assets.map((a) => to(a.value, a.currency)));
   const debt = sum(cards.map((c) => to(c.bill, c.currency))) + sum(loans.map((l) => to(l.remaining, l.currency)));
 
   const upcoming = [
-    ...cards.map((c) => ({ kind: 'card', bank: c.bank, label: 'Card bill', amount: -c.bill, currency: c.currency, date: c.due })),
+    ...cards.filter((c) => c.bill > 0).map((c) => ({ kind: 'card', bank: c.bank, label: 'Card bill', amount: -c.bill, currency: c.currency, date: c.due })),
     ...loans.map((l) => ({ kind: 'loan', bank: l.bank, label: 'Loan installment', amount: -l.installment, currency: l.currency, date: l.due })),
     ...income.map((i) => ({ kind: 'income', bank: i.bank, label: 'Payday', amount: i.amount, currency: i.currency, date: nextMonthDay(now, i.payday) })),
   ]
@@ -227,15 +229,153 @@ function summarize(data, personId, now, currency) {
     .sort((a, b) => a.days - b.days);
 
   const activity = mine(data.activity).sort((a, b) => b.date.getTime() - a.date.getTime());
+  // money that came in or went out this month; moving cash in or out of a bank, and the starting money, do not count
+  const thisMonth = activity.filter((t) => t.kind !== 'internal' && t.kind !== 'initial'
+    && t.date.getFullYear() === now.getFullYear() && t.date.getMonth() === now.getMonth());
 
   return {
-    accounts, cards, loans, assets, income, upcoming, activity,
-    cash, owned, debt,
-    netWorth: cash + owned - debt,
-    monthChange: to(data.monthChange[personId] || 0, data.rates.base),
+    cash, accounts, cards, loans, assets, income, upcoming, activity,
+    cashTotal, accountsTotal, owned, debt,
+    netWorth: cashTotal + accountsTotal + owned - debt,
+    monthChange: sum(thisMonth.map((t) => to(t.amount, t.currency))),
   };
 }
 return { summarize };
+});
+def("src/core/ledger.js", function (req) {
+/**
+ * The rules that change money. Each function checks, then changes `state` in place, and throws an Error with a sentence
+ * for the person when the action is not allowed. The screen shows that sentence; nothing is half done.
+ *
+ * Everyone starts at zero. The first time, each person declares the money they have: it becomes cash, to be deposited
+ * into the banks they choose.
+ */
+const { REGIONS, bankById } = req("src/core/banks.js");
+const { CURRENCIES, convert, formatMoney, roundNice } = req("src/core/money.js");
+
+/** Card bills close this many days before they are due. */
+const CLOSING_DAYS = 7;
+/** A card's due day is drawn from 1 to this (every month has it). */
+const MAX_DUE_DAY = 28;
+
+/** @param {any} state @param {string} prefix */
+function newId(state, prefix) {
+  state.nextId = (state.nextId || 1) + 1;
+  return `${prefix}-${state.nextId}`;
+}
+
+/** @param {any} state @param {string} personId */
+function personOf(state, personId) {
+  const p = state.people.find((/** @type {any} */ x) => x.id === personId);
+  if (!p) throw new Error('This person is not in Kinpital.');
+  return p;
+}
+
+/** @param {number} amount */
+function checkAmount(amount) {
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) throw new Error('Enter an amount above zero.');
+  if (amount > 1e12) throw new Error('That amount is too large.');
+}
+
+/** @param {any} state @param {string} owner @param {string} currency */
+function cashOf(state, owner, currency) {
+  let c = state.cash.find((/** @type {any} */ x) => x.owner === owner && x.currency === currency);
+  if (!c) { c = { owner, currency, amount: 0 }; state.cash.push(c); }
+  return c;
+}
+
+/** Currencies a bank offers: its region's, or all of them for international banks. @param {string} bankId */
+function bankCurrencies(bankId) {
+  const bank = bankById(bankId);
+  const region = bank && REGIONS.find((r) => r.id === bank.region);
+  return region ? region.currencies.filter((c) => CURRENCIES.includes(c)) : [];
+}
+
+/** The first time: the money a person has becomes cash. Zero is allowed (nothing yet). */
+function declareMoney(state, personId, amount, currency, now) {
+  const p = personOf(state, personId);
+  if (p.setup === 'done') throw new Error(`${p.kind === 'user' ? 'Your' : `${p.name}'s`} starting money is already set.`);
+  if (!CURRENCIES.includes(currency)) throw new Error('Choose a currency.');
+  if (amount !== 0) checkAmount(amount);
+  if (amount > 0) {
+    cashOf(state, personId, currency).amount += amount;
+    state.activity.push({ owner: personId, bank: null, text: 'Starting money (cash)', amount, currency, date: now, kind: 'initial' });
+  }
+  p.setup = 'done';
+  delete p.pending;
+}
+
+/** Opens a checking account at a bank, in one of the bank's currencies, with a zero balance. */
+function openAccount(state, personId, bankId, currency, now) {
+  personOf(state, personId);
+  const bank = bankById(bankId);
+  if (!bank) throw new Error('This bank does not exist.');
+  if (!bankCurrencies(bankId).includes(currency)) throw new Error(`${bank.name} does not offer accounts in ${currency}.`);
+  if (state.accounts.some((/** @type {any} */ a) => a.owner === personId && a.bank === bankId && a.currency === currency)) {
+    throw new Error(`There is already an account in ${currency} at ${bank.name}.`);
+  }
+  const account = { id: newId(state, 'acc'), owner: personId, bank: bankId, currency, balance: 0, openedAt: now };
+  state.accounts.push(account);
+  return account;
+}
+
+/** @param {any} state @param {string} personId @param {string} accountId */
+function accountOf(state, personId, accountId) {
+  const a = state.accounts.find((/** @type {any} */ x) => x.id === accountId && x.owner === personId);
+  if (!a) throw new Error('This account does not exist.');
+  return a;
+}
+
+/** Cash into an account, in the account's currency. */
+function deposit(state, personId, accountId, amount, now) {
+  const a = accountOf(state, personId, accountId);
+  checkAmount(amount);
+  const c = cashOf(state, personId, a.currency);
+  if (c.amount + 1e-9 < amount) throw new Error(`Not enough cash: ${formatMoney(c.amount, a.currency)} available.`);
+  c.amount = Math.round((c.amount - amount) * 100) / 100;
+  a.balance = Math.round((a.balance + amount) * 100) / 100;
+  state.activity.push({ owner: personId, bank: a.bank, text: 'Cash deposit', amount, currency: a.currency, date: now, kind: 'internal' });
+}
+
+/** Money out of an account, as cash. */
+function withdraw(state, personId, accountId, amount, now) {
+  const a = accountOf(state, personId, accountId);
+  checkAmount(amount);
+  if (a.balance + 1e-9 < amount) throw new Error(`Not enough money in the account: ${formatMoney(a.balance, a.currency)} available.`);
+  a.balance = Math.round((a.balance - amount) * 100) / 100;
+  const c = cashOf(state, personId, a.currency);
+  c.amount = Math.round((c.amount + amount) * 100) / 100;
+  state.activity.push({ owner: personId, bank: a.bank, text: 'Cash withdrawal', amount: -amount, currency: a.currency, date: now, kind: 'internal' });
+}
+
+/**
+ * Issues a credit card at a bank where the person has an account. The due day is drawn (1 to 28) and kept;
+ * the bill closes CLOSING_DAYS before. Provisional limit: the value of R$2,000 (traditional) or R$1,000 (digital)
+ * in the account's currency, until income and score exist.
+ * @param {() => number} [random] for tests
+ */
+function issueCard(state, personId, bankId, now, random = Math.random) {
+  const bank = bankById(bankId);
+  if (!bank) throw new Error('This bank does not exist.');
+  const account = state.accounts.find((/** @type {any} */ a) => a.owner === personId && a.bank === bankId);
+  if (!account) throw new Error(`Open an account at ${bank.name} first.`);
+  if (state.cards.some((/** @type {any} */ c) => c.owner === personId && c.bank === bankId)) throw new Error(`There is already a ${bank.name} card.`);
+  const dueDay = 1 + Math.min(MAX_DUE_DAY - 1, Math.floor(random() * MAX_DUE_DAY));
+  const limit = roundNice(convert(bank.type === 'traditional' ? 2000 : 1000, 'BRL', account.currency, state.rates));
+  const card = { id: newId(state, 'card'), owner: personId, bank: bankId, currency: account.currency, limit, bill: 0, dueDay, issuedAt: now };
+  state.cards.push(card);
+  return card;
+}
+
+/** A fresh Kinpital: these people, everyone at zero and not set up yet. @param {Array<{id: string, name: string, kind: string}>} people @param {any} rates */
+function emptyState(people, rates) {
+  return {
+    version: 1, nextId: 1, rates,
+    people: people.map((p) => ({ ...p, setup: 'new' })),
+    cash: [], accounts: [], cards: [], loans: [], income: [], assets: [], activity: [],
+  };
+}
+return { CLOSING_DAYS, MAX_DUE_DAY, bankCurrencies, declareMoney, openAccount, deposit, withdraw, issueCard, emptyState };
 });
 def("src/core/money.js", function (req) {
 /** Money: formatting and currency conversion. */
@@ -265,7 +405,62 @@ function convert(amount, from, to, rates) {
 function sum(values) {
   return values.reduce((t, v) => t + v, 0);
 }
-return { formatMoney, convert, sum };
+
+const CURRENCIES = ['BRL', 'USD', 'EUR', 'GBP', 'JPY', 'INR'];
+
+/**
+ * Reads an amount typed by a person: "3500", "3,500.50", "3.500,50", "R$ 1.200", "1200,5".
+ * The last "," or "." followed by 1 or 2 digits is the decimal mark; other separators group thousands.
+ * @param {string} text @returns {number | null} null when it is not an amount
+ */
+function parseAmount(text) {
+  const s = String(text).replace(/[^\d.,-]/g, '');
+  if (!/\d/.test(s) || s.lastIndexOf('-') > 0) return null;
+  const m = /[.,](\d{1,2})$/.exec(s);
+  const whole = (m ? s.slice(0, m.index) : s).replace(/[.,]/g, '');
+  const n = Number(`${whole}${m ? `.${m[1]}` : ''}`);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+}
+
+/** Rounds to two significant digits: 28169 → 28000, 1532 → 1500. @param {number} n */
+function roundNice(n) {
+  if (n <= 0) return 0;
+  const p = 10 ** (Math.floor(Math.log10(n)) - 1);
+  return Math.round(n / p) * p;
+}
+return { formatMoney, convert, sum, CURRENCIES, parseAmount, roundNice };
+});
+def("src/core/prompt.js", function (req) {
+/**
+ * What Kinpital asks a Kin, and how the answer is read. Prompts to the Kin are in English (as in Clotheskin).
+ * The Kin answers from its own life and backstory; the person confirms the amount before it counts.
+ */
+const { CURRENCIES } = req("src/core/money.js");
+
+const MONEY_QUESTION = [
+  'Kinpital, the banking app on your phone, is setting up your wallet.',
+  'How much money do you have right now, in total (savings and cash)? Answer from your own life and backstory, realistically.',
+  `Reply with ONLY this JSON, nothing else: {"amount": <number>, "currency": "<one of ${CURRENCIES.join(', ')}>", "said": "<one short sentence in your own voice>"}`,
+].join('\n');
+
+/**
+ * @param {string} text the Kin's reply
+ * @returns {{ amount: number, currency: string, said: string } | null} null when it is not a usable answer
+ */
+function parseMoneyAnswer(text) {
+  const m = /\{[\s\S]*\}/.exec(String(text));
+  if (!m) return null;
+  let v;
+  try { v = JSON.parse(m[0]); } catch { return null; }
+  if (!v || typeof v !== 'object') return null;
+  const amount = typeof v.amount === 'string' ? Number(v.amount.replace(/[^\d.]/g, '')) : v.amount;
+  const currency = String(v.currency || '').toUpperCase();
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0 || amount > 1e12) return null;
+  if (!CURRENCIES.includes(currency)) return null;
+  const said = typeof v.said === 'string' ? v.said.trim().slice(0, 240) : '';
+  return { amount: Math.round(amount * 100) / 100, currency, said };
+}
+return { MONEY_QUESTION, parseMoneyAnswer };
 });
 def("src/screen/bank-theme.js", function (req) {
 /** Inside a bank the whole screen takes that bank's colours: only theme variables change, never component styles. */
@@ -316,11 +511,15 @@ const { dueLabel, shortDate } = req("src/core/dates.js");
 
 /**
  * @typedef {object} Ctx
- * @property {{ person: string, view: { name: string, bank?: string }, hidden: boolean, currency: string, palette: string, now: Date, info: boolean }} state
+ * @property {{ person: string, view: { name: string, bank?: string }, hidden: boolean, currency: string, palette: string, now: Date, info: boolean, typing: string | null, form: { type: string, account?: string } | null }} state
  * @property {any} data
  * @property {(view: { name: string, bank?: string }) => void} go
  * @property {(patch: object) => void} set
  * @property {(message: string) => void} toast
+ * @property {(change: (data: any) => void, done?: string | (() => string)) => boolean} act runs a ledger change; its error becomes a toast
+ * @property {(personId: string) => void} askKin
+ * @property {(data: any, personId: string, amount: number, currency: string) => void} declareMoney
+ * @property {(data: any) => void} replaceData
  */
 
 const HIDDEN = '••••••';
@@ -356,12 +555,12 @@ function sectionTitle(text) {
 
 /** One line of activity. @param {Ctx} ctx @param {any} t */
 function activityRow(ctx, t) {
-  const bank = bankById(t.bank);
+  const bank = t.bank ? bankById(t.bank) : null;
   return h('li', { class: 'row' },
-    logo(t.bank, 32),
+    bank ? logo(bank.id, 32) : h('span', { class: 'row-icon small' }, icon('cash', 18)),
     h('span', { class: 'row-text' },
       h('span', { class: 'row-main' }, t.text),
-      h('span', { class: 'row-sub' }, `${bank ? bank.name : ''} · ${shortDate(t.date)}`)),
+      h('span', { class: 'row-sub' }, `${bank ? bank.name : 'Cash'} · ${shortDate(t.date)}`)),
     h('span', { class: `amount ${t.amount > 0 ? 'in' : ''}` }, money(ctx, t.amount, t.currency, { sign: true })));
 }
 
@@ -450,6 +649,10 @@ const P = {
   loan: '<circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.2c-.6-.9-1.6-1.4-2.8-1.4-1.6 0-2.8.8-2.8 2.1 0 2.9 5.8 1.4 5.8 4.3 0 1.3-1.3 2.1-3 2.1-1.3 0-2.4-.5-3-1.5M12 6v1.8M12 16.3V18"/>',
   car: '<path d="M4 15.5V12l2-5h12l2 5v3.5"/><path d="M3 15.5h18v3H3zM4 12h16"/><circle cx="7.5" cy="18.5" r="1.5"/><circle cx="16.5" cy="18.5" r="1.5"/>',
   person: '<circle cx="12" cy="8.2" r="3.8"/><path d="M4.5 20.5c0-3.8 3.4-6 7.5-6s7.5 2.2 7.5 6"/>',
+  chat: '<path d="M4 5.5h16v10H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
+  cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 9.5v5M18 9.5v5"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.4-4.2L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.4 4.2L20 15"/><path d="M20 20v-5h-5"/>',
+  minus: '<path d="M5 12h14"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.8v.1"/>',
 };
 
@@ -466,10 +669,12 @@ return { icon };
 def("src/screen/main.js", function (req) {
 /** The Kinpital screen: one state, one render. */
 const { h } = req("src/screen/dom.js");
-const { sampleData } = req("src/screen/sample.js");
+const { SIMULATED_ANSWERS, freshStart } = req("src/screen/sample.js");
 const { applyBankTheme } = req("src/screen/bank-theme.js");
 const { bankById } = req("src/core/banks.js");
 const { clockLine } = req("src/core/dates.js");
+const { declareMoney } = req("src/core/ledger.js");
+const { parseMoneyAnswer } = req("src/core/prompt.js");
 const { homeView } = req("src/screen/views/home.js");
 const { walletView } = req("src/screen/views/wallet.js");
 const { bankView } = req("src/screen/views/bank.js");
@@ -479,9 +684,14 @@ const { settingsView } = req("src/screen/views/settings.js");
 /** @type {Record<string, (ctx: any) => any[]>} */
 const VIEWS = { home: homeView, wallet: walletView, bank: bankView, assets: assetsView, work: workView, settings: settingsView };
 
-const now = new Date();
-const state = { person: 'you', view: { name: 'home' }, hidden: false, currency: 'BRL', palette: 'coral', now, info: false };
-const data = sampleData(now);
+const state = {
+  person: 'you', view: { name: 'home' }, hidden: false, currency: 'BRL', palette: 'coral', now: new Date(), info: false,
+  /** @type {string | null} */ typing: null,
+  /** @type {{ type: string } | null} */ form: null,
+};
+let data = freshStart();
+/** @type {Record<string, number>} */
+const asked = {};
 const app = /** @type {HTMLElement} */ (document.getElementById('app'));
 const live = h('div', { class: 'toast', role: 'status', 'aria-live': 'polite' });
 document.body.appendChild(live);
@@ -490,11 +700,12 @@ let toastTimer = 0;
 
 const ctx = {
   state,
-  data,
+  get data() { return data; },
   /** @param {{ name: string, bank?: string }} view */
   go(view) {
     state.view = view;
     state.info = false;
+    state.form = null;
     render();
     window.scrollTo(0, 0);
     const title = app.querySelector('h1');
@@ -502,11 +713,12 @@ const ctx = {
   },
   /** @param {object} patch */
   set(patch) {
-    const focusedId = document.activeElement && document.activeElement.getAttribute('data-key');
+    const focused = document.activeElement && document.activeElement.getAttribute('data-key');
     Object.assign(state, patch);
+    if ('person' in patch) { state.typing = null; state.form = null; }
     render();
-    if (focusedId) {
-      const again = app.querySelector(`[data-key="${focusedId}"]`);
+    if (focused) {
+      const again = app.querySelector(`[data-key="${focused}"]`);
       if (again instanceof HTMLElement) again.focus();
     }
   },
@@ -515,7 +727,49 @@ const ctx = {
     live.textContent = message;
     live.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => live.classList.remove('show'), 3200);
+    toastTimer = setTimeout(() => live.classList.remove('show'), 3600);
+  },
+  /** @param {(data: any) => void} change @param {string | (() => string)} [done] */
+  act(change, done) {
+    state.now = new Date();
+    try {
+      change(data);
+    } catch (e) {
+      ctx.toast(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+    render();
+    if (done) ctx.toast(typeof done === 'function' ? done() : done);
+    return true;
+  },
+  /** @param {any} d @param {string} id @param {number} amount @param {string} currency */
+  declareMoney(d, id, amount, currency) {
+    declareMoney(d, id, amount, currency, state.now);
+  },
+  /** In Kindroid this is `kin ask` with MONEY_QUESTION; the prototype answers with a simulated reply. @param {string} id */
+  askKin(id) {
+    const p = data.people.find((/** @type {any} */ x) => x.id === id);
+    if (!p) return;
+    p.setup = 'asking';
+    state.typing = null;
+    render();
+    const replies = SIMULATED_ANSWERS[id] || ['{"amount": 1000, "currency": "BRL", "said": "About a thousand."}'];
+    asked[id] = (asked[id] || 0) + 1;
+    setTimeout(() => {
+      const answer = parseMoneyAnswer(replies[(asked[id] - 1) % replies.length]);
+      if (p.setup !== 'asking') return;
+      if (!answer) { p.setup = 'new'; ctx.toast(`${p.name}’s answer could not be read. Ask again or type it.`); render(); return; }
+      p.pending = answer;
+      p.setup = 'answered';
+      render();
+    }, 1200);
+  },
+  /** @param {any} d */
+  replaceData(d) {
+    data = d;
+    state.form = null;
+    state.typing = null;
+    render();
   },
 };
 
@@ -525,7 +779,7 @@ function render() {
   applyBankTheme(root, state.view.name === 'bank' ? bankById(state.view.bank || '') : null);
   const view = VIEWS[state.view.name] || homeView;
   app.replaceChildren(...view(ctx).flat().filter(Boolean));
-  // keys so focus survives a re-render (buttons are rebuilt each time)
+  // keys so focus survives a re-render (controls are rebuilt each time)
   app.querySelectorAll('button, input, select').forEach((el, i) => el.setAttribute('data-key', `${state.view.name}-${i}`));
 }
 
@@ -539,35 +793,69 @@ return {  };
 });
 def("src/screen/sample.js", function (req) {
 /**
- * Sample data for the prototype. Dates are relative to today, so the screen always shows something due soon.
+ * Data for the prototype. It starts like a real first day: everyone at zero (freshStart). The sample (sampleData)
+ * shows a Kinpital in use; dates are relative to today, so something is always due soon.
  * Exchange rates are rough sample values, not live quotes.
  */
 const { addDays } = req("src/core/dates.js");
+const { emptyState } = req("src/core/ledger.js");
+
+const SAMPLE_RATES = { base: 'BRL', perUnit: { BRL: 1, USD: 5.32, EUR: 6.14, GBP: 7.01, JPY: 0.0355, INR: 0.0631 } };
+const SAMPLE_PEOPLE = [
+  { id: 'you', name: 'You', kind: 'user' },
+  { id: 'bia', name: 'Bia', kind: 'kin' },
+  { id: 'lucas', name: 'Lucas', kind: 'kin' },
+];
+
+/** Everyone at zero, nobody set up yet. */
+function freshStart() {
+  return emptyState(SAMPLE_PEOPLE, SAMPLE_RATES);
+}
+
+/**
+ * In Kindroid the Kin answers MONEY_QUESTION itself. The prototype has no Kin, so it picks one of these replies
+ * (the same JSON a Kin sends), to try the Accept / Edit / Ask again steps.
+ * @type {Record<string, string[]>}
+ */
+const SIMULATED_ANSWERS = {
+  bia: [
+    '{"amount": 8000, "currency": "BRL", "said": "About eight thousand reais, mostly what I saved from the café."}',
+    '{"amount": 6500, "currency": "BRL", "said": "Around 6,500. The new espresso machine ate a chunk of it."}',
+  ],
+  lucas: [
+    '{"amount": 1900, "currency": "USD", "said": "Maybe 1,900 dollars after rent. Paramedics don\'t get rich."}',
+    '{"amount": 2400, "currency": "USD", "said": "Like 2,400 bucks, if I count the cash in my sock drawer."}',
+  ],
+};
 
 /** @param {Date} now */
 function sampleData(now) {
   /** @param {number} n */
   const d = (n) => addDays(now, n);
+  /** @param {number} n */
+  const day = (n) => d(n).getDate();
   return {
-    rates: { base: 'BRL', perUnit: { BRL: 1, USD: 5.32, EUR: 6.14, GBP: 7.01, JPY: 0.0355, INR: 0.0631 } },
-    people: [
-      { id: 'you', name: 'You', kind: 'user' },
-      { id: 'bia', name: 'Bia', kind: 'kin' },
-      { id: 'lucas', name: 'Lucas', kind: 'kin' },
+    version: 1,
+    nextId: 100,
+    rates: SAMPLE_RATES,
+    people: SAMPLE_PEOPLE.map((p) => ({ ...p, setup: 'done' })),
+    cash: [
+      { owner: 'you', currency: 'BRL', amount: 180 },
+      { owner: 'lucas', currency: 'USD', amount: 60 },
     ],
     accounts: [
-      { owner: 'you', bank: 'violeta', currency: 'BRL', balance: 4820.35 },
-      { owner: 'you', bank: 'banco-imperial', currency: 'BRL', balance: 2310 },
-      { owner: 'you', bank: 'revolux', currency: 'EUR', balance: 450 },
-      { owner: 'bia', bank: 'itauba', currency: 'BRL', balance: 6200 },
-      { owner: 'bia', bank: 'mintzo', currency: 'GBP', balance: 380.5 },
-      { owner: 'lucas', bank: 'liberty-federal', currency: 'USD', balance: 1250 },
-      { owner: 'lucas', bank: 'santierra', currency: 'EUR', balance: 85.2 },
+      { id: 'acc-1', owner: 'you', bank: 'violeta', currency: 'BRL', balance: 4820.35 },
+      { id: 'acc-2', owner: 'you', bank: 'banco-imperial', currency: 'BRL', balance: 2310 },
+      { id: 'acc-3', owner: 'you', bank: 'revolux', currency: 'EUR', balance: 450 },
+      { id: 'acc-4', owner: 'bia', bank: 'itauba', currency: 'BRL', balance: 6200 },
+      { id: 'acc-5', owner: 'bia', bank: 'mintzo', currency: 'GBP', balance: 380.5 },
+      { id: 'acc-6', owner: 'lucas', bank: 'liberty-federal', currency: 'USD', balance: 1250 },
+      { id: 'acc-7', owner: 'lucas', bank: 'santierra', currency: 'EUR', balance: 85.2 },
     ],
     cards: [
-      { owner: 'you', bank: 'violeta', currency: 'BRL', limit: 5000, bill: 830, due: d(17) },
-      { owner: 'you', bank: 'revolux', currency: 'EUR', limit: 1500, bill: 64.9, due: d(5) },
-      { owner: 'bia', bank: 'itauba', currency: 'BRL', limit: 12000, bill: 2140.6, due: d(9) },
+      { id: 'card-1', owner: 'you', bank: 'violeta', currency: 'BRL', limit: 5000, bill: 830, dueDay: day(17) },
+      { id: 'card-2', owner: 'you', bank: 'revolux', currency: 'EUR', limit: 1500, bill: 64.9, dueDay: day(5) },
+      { id: 'card-3', owner: 'bia', bank: 'itauba', currency: 'BRL', limit: 12000, bill: 2140.6, dueDay: day(9) },
     ],
     loans: [
       { owner: 'you', bank: 'banco-imperial', currency: 'BRL', remaining: 9600, installment: 480, due: d(22) },
@@ -595,10 +883,9 @@ function sampleData(now) {
       { owner: 'lucas', bank: 'liberty-federal', text: 'Gym', amount: -35, currency: 'USD', date: d(-6) },
       { owner: 'lucas', bank: 'santierra', text: 'Loan installment', amount: -120, currency: 'EUR', date: d(-32) },
     ],
-    monthChange: { you: 320, bia: -140.2, lucas: -410 },
   };
 }
-return { sampleData };
+return { SAMPLE_RATES, SAMPLE_PEOPLE, freshStart, SIMULATED_ANSWERS, sampleData };
 });
 def("src/screen/views/areas.js", function (req) {
 /** Assets and Work & Income: first versions, read only. */
@@ -646,13 +933,22 @@ function workView(ctx) {
 return { assetsView, workView };
 });
 def("src/screen/views/bank.js", function (req) {
-/** One bank, in its own colours: the account, the card, the loan and what happened there. */
+/** One bank, in its own colours: open an account, move cash in and out, get a card. */
 const { h, logo } = req("src/screen/dom.js");
 const { icon } = req("src/screen/icons.js");
 const { REGIONS, bankById } = req("src/core/banks.js");
 const { summarize } = req("src/core/finance.js");
 const { daysBetween, dueLabel, shortDate } = req("src/core/dates.js");
+const { formatMoney, parseAmount } = req("src/core/money.js");
+const { CLOSING_DAYS, bankCurrencies, deposit, issueCard, openAccount, withdraw } = req("src/core/ledger.js");
 const { activityRow, empty, money, person, sectionTitle } = req("src/screen/common.js");
+
+/** @param {number} n 1 → "1st", 17 → "17th" */
+function ordinal(n) {
+  const t = n % 100;
+  const s = t >= 11 && t <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th';
+  return `${n}${s}`;
+}
 
 /** @param {import('../common.js').Ctx} ctx */
 function bankView(ctx) {
@@ -665,8 +961,9 @@ function bankView(ctx) {
   const accounts = here(s.accounts);
   const cards = here(s.cards);
   const loans = here(s.loans);
-  const later = (/** @type {string} */ what) => () => ctx.toast(`${what} comes in a later version of the prototype.`);
   const who = person(ctx);
+  const offered = bankCurrencies(bank.id);
+  const missing = offered.filter((c) => !accounts.some((a) => a.currency === c));
 
   const head = h('header', { class: 'bank-head' },
     h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Back to KinWallet', onclick: () => ctx.go({ name: 'wallet' }) }, icon('back')),
@@ -675,12 +972,31 @@ function bankView(ctx) {
       h('h1', { class: 'bank-name' }, bank.name),
       h('p', { class: 'muted small' }, `${bank.type === 'digital' ? 'Digital' : 'Traditional'} · ${region ? `${region.flag} ${region.name}` : ''}`)));
 
+  if (who.setup !== 'done') {
+    return [head, h('section', { class: 'hero' }, h('p', { class: 'hero-spec' }, bank.specialty)),
+      h('p', { class: 'banner' }, icon('info', 20), h('span', null, `First set ${who.kind === 'user' ? 'your' : `${who.name}’s`} starting money on the home screen.`))];
+  }
+
+  /** Open an account; international banks ask for the currency. @param {boolean} another */
+  const opener = (another) => {
+    const select = missing.length > 1
+      ? h('select', { class: 'select', 'aria-label': 'Account currency' }, missing.map((c) => h('option', { value: c, selected: c === state.currency }, c)))
+      : null;
+    const open = () => {
+      const currency = select ? /** @type {HTMLSelectElement} */ (select).value : missing[0];
+      ctx.act((d) => { openAccount(d, who.id, bank.id, currency, state.now); }, `Account opened at ${bank.name}, in ${currency}.`);
+    };
+    return h('div', { class: 'opener' }, select,
+      h('button', { class: `btn ${another ? '' : 'primary'} block`, type: 'button', onclick: open }, icon('plus'),
+        another ? 'Open an account in another currency' : `Open account${missing.length === 1 ? ` in ${missing[0]}` : ''}`));
+  };
+
   if (!accounts.length) {
     return [head,
       h('section', { class: 'hero' },
         h('p', { class: 'hero-label' }, who.kind === 'user' ? 'You have no account here yet' : `${who.name} has no account here yet`),
         h('p', { class: 'hero-spec' }, bank.specialty)),
-      h('button', { class: 'btn primary block', type: 'button', onclick: later('Opening an account') }, icon('plus'), 'Open account')];
+      opener(false)];
   }
 
   const hero = accounts.map((a) => h('section', { class: 'hero', 'aria-label': 'Account balance' },
@@ -688,18 +1004,33 @@ function bankView(ctx) {
     h('p', { class: 'hero-value' }, money(ctx, a.balance, a.currency)),
     h('p', { class: 'hero-owner' }, who.kind === 'user' ? 'You' : who.name)));
 
-  const action = (/** @type {string} */ ic, /** @type {string} */ label) => h('button', { class: 'action', type: 'button', onclick: later(label) },
-    h('span', { class: 'action-icon' }, icon(ic, 22)), h('span', null, label));
+  const formType = state.form && state.form.type;
+  const toggle = (/** @type {string} */ type) => () => ctx.set({ form: formType === type ? null : { type } });
+  const action = (/** @type {string} */ ic, /** @type {string} */ label, /** @type {() => void} */ onclick, /** @type {boolean} */ pressed) =>
+    h('button', { class: 'action', type: 'button', onclick, 'aria-pressed': pressed == null ? null : String(pressed) },
+      h('span', { class: 'action-icon' }, icon(ic, 22)), h('span', null, label));
   const actions = h('nav', { class: 'actions', 'aria-label': 'Actions' },
-    action('send', 'Transfer'), action('receipt', 'Pay'), action('card', 'Card'), action('exchange', 'Exchange'));
+    action('income', 'Deposit', toggle('deposit'), formType === 'deposit'),
+    action('cash', 'Withdraw', toggle('withdraw'), formType === 'withdraw'),
+    action('card', 'Card', () => {
+      if (cards.length) { ctx.toast(`Bill due on the ${ordinal(cards[0].dueDay)} of each month.`); return; }
+      ctx.act((d) => { issueCard(d, who.id, bank.id, state.now); }, () => {
+        const c = data.cards.find((/** @type {any} */ x) => x.owner === who.id && x.bank === bank.id);
+        return `Card issued. The bill is due on the ${ordinal(c.dueDay)} of each month and closes ${CLOSING_DAYS} days before.`;
+      });
+    }, null),
+    action('send', 'Transfer', () => ctx.toast('Transfers come in the next version.'), null));
+
+  const form = formType === 'deposit' || formType === 'withdraw' ? moveForm(ctx, formType, accounts, s.cash, who.id) : null;
 
   const cardBlocks = cards.map((c) => {
-    const days = daysBetween(state.now, c.due);
-    const used = Math.min(100, Math.round((c.bill / c.limit) * 100));
+    const used = c.limit > 0 ? Math.min(100, Math.round((c.bill / c.limit) * 100)) : 0;
+    const closes = new Date(c.due.getFullYear(), c.due.getMonth(), c.due.getDate() - CLOSING_DAYS);
     return h('section', { class: 'card list-card' },
       sectionTitle('Credit card'),
       h('p', { class: 'line' }, h('span', null, 'Current bill'), h('strong', null, money(ctx, c.bill, c.currency))),
-      h('p', { class: 'line muted' }, h('span', null, `Due ${shortDate(c.due)}`), h('span', null, dueLabel(days))),
+      h('p', { class: 'line muted' }, h('span', null, `Due ${shortDate(c.due)}`), h('span', null, dueLabel(daysBetween(state.now, c.due)))),
+      h('p', { class: 'line muted small' }, h('span', null, `Closes ${shortDate(closes)}`), h('span', null, `Due on the ${ordinal(c.dueDay)} each month`)),
       h('div', { class: 'meter', role: 'img', 'aria-label': `${used}% of the limit used` }, h('span', { style: `width:${used}%` })),
       h('p', { class: 'line muted small' }, h('span', null, `${used}% of the limit`), h('span', null, `Limit ${money(ctx, c.limit, c.currency)}`)));
   });
@@ -715,11 +1046,58 @@ function bankView(ctx) {
   });
 
   const activity = here(s.activity);
-  return [head, hero, actions, cardBlocks, loanBlocks,
+  return [head, hero, actions, form, cardBlocks, loanBlocks,
+    missing.length ? opener(true) : null,
     h('section', { class: 'card list-card' }, sectionTitle('Activity'),
       activity.length ? h('ul', { class: 'rows' }, activity.map((t) => activityRow(ctx, t))) : empty('No activity at this bank yet.'))];
 }
-return { bankView };
+
+/**
+ * Deposit (cash → account) or withdraw (account → cash), in the account's currency.
+ * @param {import('../common.js').Ctx} ctx @param {string} type @param {any[]} accounts @param {any[]} cash @param {string} owner
+ */
+function moveForm(ctx, type, accounts, cash, owner) {
+  const deposit_ = type === 'deposit';
+  const pick = accounts.length > 1
+    ? h('select', { class: 'select', name: 'account', 'aria-label': 'Account' }, accounts.map((a) => h('option', { value: a.id }, `${a.currency} account`)))
+    : null;
+  const current = () => accounts.find((a) => a.id === (pick ? /** @type {HTMLSelectElement} */ (pick).value : accounts[0].id)) || accounts[0];
+  const available = () => {
+    const a = current();
+    if (!deposit_) return a.balance;
+    const c = cash.find((x) => x.currency === a.currency);
+    return c ? c.amount : 0;
+  };
+  const hint = h('p', { class: 'muted small' });
+  const showHint = () => {
+    const a = current();
+    hint.textContent = deposit_
+      ? `Cash in ${a.currency}: ${formatMoney(available(), a.currency)}${available() === 0 ? '. Exchanging other currencies comes later.' : ''}`
+      : `In the account: ${formatMoney(available(), a.currency)}`;
+  };
+  if (pick) pick.addEventListener('change', showHint);
+  showHint();
+  const input = /** @type {HTMLInputElement} */ (h('input', { class: 'text-input', name: 'amount', inputmode: 'decimal', autocomplete: 'off', placeholder: '0.00', 'aria-label': 'Amount' }));
+  const form = h('form', { class: 'card list-card move-form', novalidate: true },
+    sectionTitle(deposit_ ? 'Deposit cash' : 'Withdraw as cash'),
+    pick, h('div', { class: 'money-inputs' }, input,
+      h('button', { class: 'btn', type: 'button', onclick: () => { input.value = String(available()); input.focus(); } }, 'All')),
+    hint,
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', type: 'submit' }, deposit_ ? 'Deposit' : 'Withdraw'),
+      h('button', { class: 'link-btn', type: 'button', onclick: () => ctx.set({ form: null }) }, 'Cancel')));
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const amount = parseAmount(input.value);
+    if (amount == null || amount <= 0) { ctx.toast('Type an amount above zero.'); return; }
+    const a = current();
+    const ok = ctx.act((d) => (deposit_ ? deposit : withdraw)(d, owner, a.id, amount, ctx.state.now),
+      `${deposit_ ? 'Deposited' : 'Withdrew'} ${formatMoney(amount, a.currency)}.`);
+    if (ok) ctx.set({ form: null });
+  });
+  return form;
+}
+return { ordinal, bankView };
 });
 def("src/screen/views/home.js", function (req) {
 /** The Kinpital home: whose money, how much, what comes next, and the way into each area. */
@@ -729,6 +1107,7 @@ const { summarize } = req("src/core/finance.js");
 const { formatMoney } = req("src/core/money.js");
 const { clockLine } = req("src/core/dates.js");
 const { activityRow, empty, money, person, possessive, sectionTitle, upcomingRow } = req("src/screen/common.js");
+const { setupCard } = req("src/screen/views/setup.js");
 
 /** @param {import('../common.js').Ctx} ctx */
 function homeView(ctx) {
@@ -756,9 +1135,11 @@ function homeView(ctx) {
       h('button', { class: 'icon-btn small', type: 'button', 'aria-label': state.hidden ? 'Show amounts' : 'Hide amounts', 'aria-pressed': String(state.hidden), onclick: () => ctx.set({ hidden: !state.hidden }) },
         icon(state.hidden ? 'eye-off' : 'eye', 20))),
     h('p', { class: 'worth-value' }, money(ctx, s.netWorth, cur)),
-    h('p', { class: `worth-change ${state.hidden ? 'off' : change >= 0 ? 'up' : 'down'}` },
-      state.hidden ? 'This month: hidden' : `${change >= 0 ? '▲' : '▼'} ${formatMoney(Math.abs(change), cur)} this month`),
-    h('p', { class: 'worth-meta muted' }, [plural(s.accounts.length, 'account'), plural(s.cards.length, 'card'), s.loans.length ? plural(s.loans.length, 'loan') : null].filter(Boolean).join(' · ')));
+    h('p', { class: `worth-change ${state.hidden || Math.abs(change) < 0.005 ? 'off' : change > 0 ? 'up' : 'down'}` },
+      state.hidden ? 'This month: hidden'
+        : Math.abs(change) < 0.005 ? 'No money in or out this month'
+          : `${change > 0 ? '▲' : '▼'} ${formatMoney(Math.abs(change), cur)} this month`),
+    h('p', { class: 'worth-meta muted' }, [s.cashTotal > 0 ? `${money(ctx, s.cashTotal, cur)} in cash` : null, plural(s.accounts.length, 'account'), plural(s.cards.length, 'card'), s.loans.length ? plural(s.loans.length, 'loan') : null].filter(Boolean).join(' · ')));
 
   const coming = h('section', { class: 'card list-card' },
     sectionTitle('Coming up'),
@@ -771,7 +1152,7 @@ function homeView(ctx) {
   }, h('span', { class: 'tile-icon' }, icon(ic, 24)), h('span', { class: 'tile-title' }, title), h('span', { class: 'tile-sub' }, sub));
 
   const tiles = h('nav', { class: 'tiles', 'aria-label': 'Areas' },
-    tile('wallet', 'KinWallet', s.accounts.length ? plural(s.accounts.length, 'account') : 'Open an account', { name: 'wallet' }),
+    tile('wallet', 'KinWallet', s.accounts.length ? plural(s.accounts.length, 'account') : s.cashTotal > 0 ? 'Cash to deposit' : 'Open an account', { name: 'wallet' }),
     tile('home', 'Assets', s.assets.length ? plural(s.assets.length, 'item') : 'Nothing yet', { name: 'assets' }),
     tile('briefcase', 'Work & Income', nextPay ? `Payday ${nextPay.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : 'No income yet', { name: 'work' }),
     tile('chart', 'Market', 'Coming soon', null));
@@ -788,8 +1169,8 @@ function homeView(ctx) {
     h('header', { class: 'home-head' },
       h('div', null, h('h1', { class: 'brand' }, 'Kinpital'), h('p', { class: 'clock muted' }, clockLine(state.now))),
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Settings', onclick: () => ctx.go({ name: 'settings' }) }, icon('gear'))),
-    chips, info, worth, coming, tiles, recent, ticker,
-    h('p', { class: 'foot muted' }, `Prototype with sample data. ${possessive(ctx)} figures are made up; exchange rates are sample values.`),
+    chips, info, setupCard(ctx), worth, coming, tiles, recent, ticker,
+    h('p', { class: 'foot muted' }, `Prototype: nothing is saved yet, and exchange rates are sample values. ${possessive(ctx) === 'Your' ? 'Reloading starts over.' : ''}`),
   ];
 }
 return { homeView };
@@ -797,6 +1178,8 @@ return { homeView };
 def("src/screen/views/settings.js", function (req) {
 /** Settings: colours, the currency totals are shown in, and the attached Kins. */
 const { h } = req("src/screen/dom.js");
+const { icon } = req("src/screen/icons.js");
+const { freshStart, sampleData } = req("src/screen/sample.js");
 const { sectionTitle, topBar } = req("src/screen/common.js");
 
 const CURRENCIES = ['BRL', 'USD', 'EUR', 'GBP', 'JPY', 'INR'];
@@ -814,9 +1197,97 @@ function settingsView(ctx) {
         CURRENCIES.map((c) => h('option', { value: c, selected: c === state.currency }, c)))),
     h('section', { class: 'card list-card' }, sectionTitle('Attached Kins'),
       h('ul', { class: 'plain' }, data.people.filter((/** @type {any} */ p) => p.kind === 'kin').map((/** @type {any} */ p) => h('li', null, p.name))),
-      h('p', { class: 'muted small' }, 'Kins with Kinpital attached in Kindroid’s Workshop. Sample names in the prototype.'))];
+      h('p', { class: 'muted small' }, 'Kins with Kinpital attached in Kindroid’s Workshop. Sample names in the prototype.')),
+    h('section', { class: 'card list-card' }, sectionTitle('Prototype'),
+      h('p', { class: 'muted small pad' }, 'Nothing is saved yet: reloading the page starts over.'),
+      h('div', { class: 'btn-row pad' },
+        h('button', { class: 'btn', type: 'button', onclick: () => { ctx.replaceData(freshStart()); ctx.toast('Everyone is back at zero.'); } }, icon('refresh', 18), 'Start over'),
+        h('button', { class: 'btn', type: 'button', onclick: () => { ctx.replaceData(sampleData(state.now)); ctx.toast('Sample data loaded.'); } }, 'Load sample data')))];
 }
 return { settingsView };
+});
+def("src/screen/views/setup.js", function (req) {
+/**
+ * The first time for each person: everyone starts at zero and declares the money they have, which becomes cash.
+ * You type yours. For a Kin, Kinpital asks the Kin (the person confirms: Accept, Edit, Ask again) or the person types it.
+ */
+const { h } = req("src/screen/dom.js");
+const { icon } = req("src/screen/icons.js");
+const { CURRENCIES, formatMoney, parseAmount } = req("src/core/money.js");
+const { person } = req("src/screen/common.js");
+
+/** @param {import('../common.js').Ctx} ctx */
+function setupCard(ctx) {
+  const p = person(ctx);
+  if (!p || p.setup === 'done') return null;
+  if (p.kind === 'user') {
+    return h('section', { class: 'card setup' },
+      h('h2', { class: 'setup-title' }, 'Welcome to Kinpital'),
+      h('p', null, 'Everyone starts at zero. How much money do you have right now?'),
+      moneyForm(ctx, p, 'Your money', null),
+      h('p', { class: 'muted small' }, 'It becomes cash in your KinWallet, ready to deposit into the banks you choose.'));
+  }
+  const typing = ctx.state.typing === p.id;
+  const head = h('h2', { class: 'setup-title' }, `How much money does ${p.name} have?`);
+  if (typing) {
+    return h('section', { class: 'card setup' }, head,
+      moneyForm(ctx, p, `${p.name}’s money`, p.pending || null),
+      h('button', { class: 'link-btn', type: 'button', onclick: () => ctx.set({ typing: null }) }, `Ask ${p.name} instead`));
+  }
+  if (p.setup === 'asking') {
+    return h('section', { class: 'card setup' }, head,
+      h('p', { class: 'asking', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), `Asking ${p.name}…`));
+  }
+  if (p.setup === 'answered' && p.pending) {
+    const a = p.pending;
+    return h('section', { class: 'card setup' }, head,
+      a.said ? h('blockquote', { class: 'quote' }, h('p', null, `“${a.said}”`), h('footer', null, `— ${p.name}`)) : null,
+      h('p', { class: 'setup-amount' }, formatMoney(a.amount, a.currency), h('span', { class: 'muted' }, ' in cash')),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn primary', type: 'button', onclick: () => ctx.act((d) => declare(d, p.id, a.amount, a.currency, ctx), `${p.name}’s cash is set.`) }, 'Accept'),
+        h('button', { class: 'btn', type: 'button', onclick: () => ctx.set({ typing: p.id }) }, 'Edit'),
+        h('button', { class: 'btn', type: 'button', onclick: () => ctx.askKin(p.id) }, icon('chat', 18), 'Ask again')),
+      h('p', { class: 'muted small' }, 'Nothing counts until you accept.'));
+  }
+  return h('section', { class: 'card setup' }, head,
+    h('p', null, `${p.name} starts at zero. Kinpital can ask ${p.name}, who answers from their own life; you confirm the amount before it counts.`),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', type: 'button', onclick: () => ctx.askKin(p.id) }, icon('chat', 18), `Ask ${p.name}`),
+      h('button', { class: 'btn', type: 'button', onclick: () => ctx.set({ typing: p.id }) }, 'Type it myself')));
+}
+
+/** @param {any} data @param {string} id @param {number} amount @param {string} currency @param {import('../common.js').Ctx} ctx */
+function declare(data, id, amount, currency, ctx) {
+  ctx.declareMoney(data, id, amount, currency);
+  ctx.state.typing = null;
+}
+
+/**
+ * @param {import('../common.js').Ctx} ctx @param {any} p @param {string} label
+ * @param {{ amount: number, currency: string } | null} prefill
+ */
+function moneyForm(ctx, p, label, prefill) {
+  const amountId = `amount-${p.id}`;
+  const form = h('form', { class: 'money-form', novalidate: true },
+    h('label', { class: 'label', for: amountId }, label),
+    h('div', { class: 'money-inputs' },
+      h('select', { class: 'select currency', name: 'currency', 'aria-label': 'Currency' },
+        CURRENCIES.map((c) => h('option', { value: c, selected: c === (prefill ? prefill.currency : ctx.state.currency) }, c))),
+      h('input', { class: 'text-input', id: amountId, name: 'amount', inputmode: 'decimal', autocomplete: 'off', placeholder: '0.00', value: prefill ? String(prefill.amount) : null })),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', type: 'submit' }, 'Save'),
+      h('button', { class: 'link-btn', type: 'button', onclick: () => ctx.act((d) => declare(d, p.id, 0, 'BRL', ctx), 'Starting at zero.') }, 'Nothing yet')));
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = /** @type {HTMLFormElement} */ (form);
+    const amount = parseAmount(/** @type {HTMLInputElement} */ (f.elements.namedItem('amount')).value);
+    const currency = /** @type {HTMLSelectElement} */ (f.elements.namedItem('currency')).value;
+    if (amount == null || amount < 0) { ctx.toast('Type an amount, like 3500 or 3,500.00.'); return; }
+    ctx.act((d) => declare(d, p.id, amount, currency, ctx), amount > 0 ? `${formatMoney(amount, currency)} in cash.` : 'Starting at zero.');
+  });
+  return form;
+}
+return { setupCard };
 });
 def("src/screen/views/wallet.js", function (req) {
 /** KinWallet: the person's accounts, and the 24 banks to open one in. */
@@ -832,6 +1303,16 @@ function walletView(ctx) {
   const s = summarize(data, state.person, state.now, state.currency);
   const has = new Set(s.accounts.map((a) => a.bank));
 
+  const cash = s.cash.length
+    ? h('section', { class: 'card list-card' },
+      sectionTitle('Cash'),
+      h('ul', { class: 'rows' }, s.cash.map((c) => h('li', { class: 'row' },
+        h('span', { class: 'row-icon' }, icon('cash', 20)),
+        h('span', { class: 'row-text' }, h('span', { class: 'row-main' }, `Cash · ${c.currency}`), h('span', { class: 'row-sub' }, 'In hand, not in a bank')),
+        h('span', { class: 'amount' }, money(ctx, c.amount, c.currency))))),
+      h('p', { class: 'muted small cash-help' }, 'Open an account at any bank below, then tap Deposit there. You can spread it across several banks.'))
+    : null;
+
   const accounts = h('section', { class: 'card list-card' },
     sectionTitle(`${possessive(ctx)} accounts`),
     s.accounts.length
@@ -844,7 +1325,7 @@ function walletView(ctx) {
           icon('chevron', 18)));
       }))
       : empty('No accounts yet. Pick a bank below.'),
-    s.accounts.length ? h('p', { class: 'total' }, h('span', { class: 'muted' }, 'Total in accounts'), h('strong', null, money(ctx, s.cash, state.currency))) : null);
+    s.accounts.length ? h('p', { class: 'total' }, h('span', { class: 'muted' }, 'Total in accounts'), h('strong', null, money(ctx, s.accountsTotal, state.currency))) : null);
 
   const banks = h('section', { class: 'card list-card' },
     sectionTitle(`Open an account · ${BANKS.length} banks`),
@@ -855,7 +1336,7 @@ function walletView(ctx) {
           logo(b.id, 40), h('span', { class: 'bank-pick-name' }, b.name),
           h('span', { class: 'bank-pick-sub' }, has.has(b.id) ? 'Account open' : b.type === 'digital' ? 'Digital' : 'Traditional'))))))));
 
-  return [topBar(ctx, 'KinWallet'), accounts, banks];
+  return [topBar(ctx, 'KinWallet'), cash, accounts, banks];
 }
 return { walletView };
 });
