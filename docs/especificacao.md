@@ -174,7 +174,8 @@ Regra: texto sobre qualquer cor precisa de pelo menos **4,5:1** (WCAG AA). Medid
 ### Logos
 
 A imagem de referência é um bitmap com os 24 logos juntos e em baixa resolução. No app, cada logo precisa ser um
-**SVG** próprio: nítido em qualquer tamanho e leve. *(Ver 13: arquivos separados ou redesenho.)*
+**SVG** próprio: nítido em qualquer tamanho e leve. Não existem arquivos separados, então os 24 logos foram
+redesenhados em SVG a partir da imagem, em `screen/assets/banks/<id>.svg` (só o símbolo, sem o nome).
 
 Os nomes são paródias. As cores e os logos devem ter identidade própria, sem copiar as marcas reais.
 
@@ -228,19 +229,18 @@ O usuário e os Kins recebem salário mensal em tempo real, direto na conta. Det
 
 1. **"Anexado":** confirmar que são os Kins com o programa anexado no Workshop.
 2. **Como o Kin movimenta dinheiro:** o Kin faz transações durante a conversa (ex.: "te mandei R$ 50" vira uma
-   transferência no app), ou só o usuário opera pelo app e o Kin é informado (`kin tell`)?
+   transferência no app), ou só o usuário opera pelo app e o Kin é informado (`kin tell`)? *(Adiado: será pensado
+   depois.)*
 3. **Vencimento da fatura:** cada pessoa escolhe o dia ao abrir o cartão (ex.: 5, 10, 15, 20 ou 25, com fechamento
    uns 7 dias antes), ou cada banco tem um dia fixo?
 4. **Salário dos Kins:** de onde vem o valor? Da profissão no backstory do Kin, escolhido pelo usuário, ou outra
    regra?
-5. **Logos:** existem arquivos separados de cada logo, ou eles serão redesenhados em SVG a partir da imagem?
-6. **Rede no Workshop:** existe *grant* de rede? (ver 10)
-7. **Saldo inicial:** com quanto cada pessoa começa?
-8. **Moeda principal:** em que moeda a KinWallet mostra o saldo total (BRL por padrão)?
-9. **Realismo dos juros:** usar taxas no nível real (o rotativo no Brasil passa de 400% ao ano) ou suavizar?
-10. **O que o Kin sabe:** o Kin é informado das próprias finanças (saldo, dívidas) para usar no roleplay?
-11. **Idioma da interface:** português, inglês ou os dois? (o Clotheskin tem a tela em inglês)
-12. **Tradicional × Digital:** quais diferenças concretas no jogo?
+5. **Rede no Workshop:** existe *grant* de rede? (ver 10)
+6. **Saldo inicial:** com quanto cada pessoa começa?
+7. **Moeda principal:** em que moeda a KinWallet mostra o saldo total (BRL por padrão)?
+8. **Realismo dos juros:** usar taxas no nível real (o rotativo no Brasil passa de 400% ao ano) ou suavizar?
+9. **O que o Kin sabe:** o Kin é informado das próprias finanças (saldo, dívidas) para usar no roleplay?
+10. **Tradicional × Digital:** quais diferenças concretas no jogo?
 
 ## 14. Histórico de decisões
 
@@ -254,3 +254,7 @@ O usuário e os Kins recebem salário mensal em tempo real, direto na conta. Det
 - **2026-11-23:** dados reais para câmbio e juros básicos, se o Workshop permitir rede (modelo híbrido).
 - **2026-11-23:** áreas além da KinWallet: Imóveis e bens e Trabalho e renda confirmadas; Bolsa depende dos dados
   reais.
+- **2026-11-23:** toda a interface em **inglês** (como o Clotheskin). Os documentos para o usuário continuam em
+  português.
+- **2026-11-23:** os logos são redesenhados em SVG a partir da imagem de referência.
+- **2026-11-23:** como o Kin movimenta dinheiro fica para depois.

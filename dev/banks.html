@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KinWallet banks: logo and colour preview</title>
+  <link rel="stylesheet" href="../screen/theme.css">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+      font: 15px/1.4 "Helvetica Neue", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    h1 { margin: 0 0 4px; font-size: 1.5rem; }
+    h2 { margin: 28px 0 10px; font-size: .8rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+    .bank { border-radius: var(--radius-md); overflow: hidden; background: var(--glass-solid); border: 1px solid var(--line-soft);
+      box-shadow: var(--shadow-glass); }
+    .head { display: flex; align-items: center; gap: 10px; padding: 14px; background: var(--b-surface); }
+    .head img { width: 48px; height: 48px; flex: none; }
+    .name { font-weight: 700; font-size: 1.05rem; color: var(--b-primary-text); }
+    .type { font-size: .75rem; color: var(--muted); }
+    .body { padding: 10px 14px 14px; display: grid; gap: 10px; }
+    .spec { font-size: .8rem; color: var(--muted); min-height: 2.3em; }
+    .btn { border: 0; border-radius: var(--radius-pill); padding: 9px 14px; font: inherit; font-weight: 700;
+      background: var(--b-accent); color: var(--b-on-accent); }
+    .swatches { display: flex; gap: 6px; }
+    .swatches span { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(0,0,0,.08); }
+  </style>
+</head>
+<body>
+  <h1>KinWallet banks</h1>
+  <p class="type">24 fictional banks · logos redrawn as SVG · button colours meet WCAG AA</p>
+  <main id="regions"></main>
+  <script type="module">
+    import { REGIONS, banksInRegion } from '../src/core/banks.js';
+    import { contrast } from '../src/core/color.js';
+
+    const root = document.getElementById('regions');
+    for (const region of REGIONS) {
+      const h = document.createElement('h2');
+      h.textContent = `${region.flag} ${region.name} · ${region.currencies.join(' ')}`;
+      const grid = document.createElement('div');
+      grid.className = 'grid';
+      for (const b of banksInRegion(region.id)) {
+        const c = b.colors;
+        // brand colour as text on its own surface, unless it is too light: then the darker button text colour
+        const primaryText = contrast(c.primary, c.surface) >= 3 ? c.primary : c.onAccent;
+        const el = document.createElement('article');
+        el.className = 'bank';
+        el.style.cssText = `--b-surface:${c.surface};--b-primary-text:${primaryText};--b-accent:${c.accent};--b-on-accent:${c.onAccent}`;
+        el.innerHTML = `
+          <div class="head"><img src="../screen/assets/banks/${b.id}.svg" alt="">
+            <div><div class="name"></div><div class="type">${b.type === 'digital' ? 'Digital' : 'Traditional'}</div></div></div>
+          <div class="body"><div class="spec"></div>
+            <div class="swatches">${[c.primary, c.secondary, c.surface].map((x) => `<span style="background:${x}" title="${x}"></span>`).join('')}</div>
+            <button class="btn" type="button">Open account</button></div>`;
+        el.querySelector('.name').textContent = b.name;
+        el.querySelector('.spec').textContent = b.specialty;
+        grid.append(el);
+      }
+      root.append(h, grid);
+    }
+  </script>
+</body>
+</html>
